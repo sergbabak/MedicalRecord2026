@@ -36,12 +36,13 @@ jobs:
           digest = hashlib.sha256(data).hexdigest()
           expected = '${{ env.SOURCE_SHA256 }}'
           assert digest == expected, f'SHA256 mismatch: {digest} != {expected}'
-          archive = pathlib.Path('rc041-source.tar.xz')
-          archive.write_bytes(data)
-          with tarfile.open(archive, 'r:xz') as tf:
-              tf.extractall('work')
+          pathlib.Path('rc041-source.tar.xz').write_bytes(data)
+          with tarfile.open('rc041-source.tar.xz', 'r:xz') as tf: tf.extractall('work')
           print(f'SOURCE INTEGRITY PASS: {digest}; {len(data)} bytes')
           '@ | python -
+      - name: Apply reviewed RC compile fixes
+        shell: pwsh
+        run: python ci/patch_rc041.py work/MedicalRecord2026
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -88,14 +89,13 @@ jobs:
           b64 = ''.join(pathlib.Path(p).read_text().strip() for p in parts)
           data = base64.b64decode(b64, validate=True)
           digest = hashlib.sha256(data).hexdigest()
-          expected = os.environ['SOURCE_SHA256']
-          assert digest == expected, f'SHA256 mismatch: {digest} != {expected}'
-          archive = pathlib.Path('rc041-source.tar.xz')
-          archive.write_bytes(data)
-          with tarfile.open(archive, 'r:xz') as tf:
-              tf.extractall('work')
+          assert digest == os.environ['SOURCE_SHA256'], f'SHA256 mismatch: {digest}'
+          pathlib.Path('rc041-source.tar.xz').write_bytes(data)
+          with tarfile.open('rc041-source.tar.xz', 'r:xz') as tf: tf.extractall('work')
           print(f'SOURCE INTEGRITY PASS: {digest}; {len(data)} bytes')
           PY
+      - name: Apply reviewed RC compile fixes
+        run: python3 ci/patch_rc041.py work/MedicalRecord2026
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
