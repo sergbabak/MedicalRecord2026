@@ -34,10 +34,10 @@ for rel in ['src/MedicalRecord.Api/Endpoints/PapEndpoints.cs', 'src/MedicalRecor
     p.write_text(p.read_text(encoding='utf-8').replace('details=', 'details:'), encoding='utf-8')
 
 # macOS Development artifacts are intentionally unsigned. Trusted Production alone uses
-# Developer ID, hardened runtime, notarization and stapling. This avoids pretending that
-# ad-hoc signing is a trusted distribution signature, and lets the real install smoke test run.
+# Developer ID, hardened runtime, notarization and stapling.
 p = root / 'packaging/macos/build-installer.sh'
 s = p.read_text(encoding='utf-8')
+s = s.replace('APP="$OUT/Medical Record 2026-$RID.app"', 'APP="$OUT/Medical Record 2026.app"')
 start = s.index('sign_native(){')
 end_marker = 'codesign --verify --strict --verbose=2 "$APP"\n'
 end = s.index(end_marker, start) + len(end_marker)
@@ -63,7 +63,7 @@ s = s.replace('"$APP/Contents/MacOS/MedicalRecord2026" --self-test\ncodesign --v
 s = s.replace('codesign --verify --strict --verbose=2 "$MOUNT/Medical Record 2026.app"\nhdiutil detach "$MOUNT"', 'if [[ "$CHANNEL" == Production ]]; then codesign --verify --strict --verbose=2 "$MOUNT/Medical Record 2026.app"; fi\nhdiutil detach "$MOUNT"')
 p.write_text(s, encoding='utf-8')
 
-# Windows: WinExe can leave LASTEXITCODE unset in pwsh; wait for the process and inspect ExitCode explicitly.
+# Windows: WinExe can leave LASTEXITCODE unset in pwsh; inspect the started process directly.
 p = root / 'packaging/windows/test-installer.ps1'
 s = p.read_text(encoding='utf-8')
 s = s.replace('& $exe --self-test\nif($LASTEXITCODE -ne 0){throw "Installed application self-test failed with $LASTEXITCODE."}', '$selfTest=Start-Process -FilePath $exe -ArgumentList @("--self-test") -Wait -PassThru\nif($selfTest.ExitCode -ne 0){throw "Installed application self-test failed with $($selfTest.ExitCode)."}')
