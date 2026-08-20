@@ -1,0 +1,134 @@
+name: rc041-native-installers
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rc041-native-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  SOURCE_SHA256: d177b4bc89a7bf01ca7ef04dc42459472fe0164797a10088255cbcc0b5cecd00
+  APP_VERSION: 0.4.1
+
+jobs:
+  windows-x64:
+    name: Windows x64 installer + install smoke test
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct and verify RC 0.4.1 source archive
+        shell: pwsh
+        run: |
+          @'
+          import base64, glob, hashlib, pathlib, tarfile
+          parts = sorted(glob.glob('ci/source/rc041.part*'))
+          assert len(parts) == 18, f'Expected 18 chunks, got {len(parts)}'
+          b64 = ''.join(pathlib.Path(p).read_text().strip() for p in parts)
+          data = base64.b64decode(b64, validate=True)
+          digest = hashlib.sha256(data).hexdigest()
+          expected = '${{ env.SOURCE_SHA256 }}'
+          assert digest == expected, f'SHA256 mismatch: {digest} != {expected}'
+          archive = pathlib.Path('rc041-source.tar.xz')
+          archive.write_bytes(data)
+          with tarfile.open(archive, 'r:xz') as tf:
+              tf.extractall('work')
+          print(f'SOURCE INTEGRITY PASS: {digest}; {len(data)} bytes')
+          '@ | python -
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Static validation + restore + compile
+        shell: pwsh
+        working-directory: work/MedicalRecord2026
+        run: |
+          python scripts/static_validate.py
+          dotnet restore MedicalRecord2026.sln
+          dotnet build MedicalRecord2026.sln -c Release --no-restore
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+      - name: Build Windows development installer
+        shell: pwsh
+        working-directory: work/MedicalRecord2026
+        run: ./packaging/windows/build-installer.ps1 -Runtime win-x64 -Version '${{ env.APP_VERSION }}' -ApiUrl 'http://localhost:5186/' -ReleaseChannel Development
+      - name: Install / self-test / uninstall Windows package
+        shell: pwsh
+        working-directory: work/MedicalRecord2026
+        run: ./packaging/windows/test-installer.ps1 -Installer "artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-development-setup.exe" -Runtime win-x64 -ReleaseChannel Development
+      - name: Upload Windows installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-Development
+          path: |
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-development-setup.exe
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-development-setup.exe.sha256
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-DEVELOPMENT.txt
+          if-no-files-found: error
+
+  macos-arm64:
+    name: macOS Apple Silicon pkg+dmg + install smoke test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct and verify RC 0.4.1 source archive
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, glob, hashlib, pathlib, tarfile, os
+          parts = sorted(glob.glob('ci/source/rc041.part*'))
+          assert len(parts) == 18, f'Expected 18 chunks, got {len(parts)}'
+          b64 = ''.join(pathlib.Path(p).read_text().strip() for p in parts)
+          data = base64.b64decode(b64, validate=True)
+          digest = hashlib.sha256(data).hexdigest()
+          expected = os.environ['SOURCE_SHA256']
+          assert digest == expected, f'SHA256 mismatch: {digest} != {expected}'
+          archive = pathlib.Path('rc041-source.tar.xz')
+          archive.write_bytes(data)
+          with tarfile.open(archive, 'r:xz') as tf:
+              tf.extractall('work')
+          print(f'SOURCE INTEGRITY PASS: {digest}; {len(data)} bytes')
+          PY
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Static validation + restore + compile
+        working-directory: work/MedicalRecord2026
+        run: |
+          python3 scripts/static_validate.py
+          dotnet restore MedicalRecord2026.sln
+          dotnet build MedicalRecord2026.sln -c Release --no-restore
+      - name: Build macOS development app/pkg/dmg
+        working-directory: work/MedicalRecord2026
+        env:
+          RELEASE_CHANNEL: Development
+          VERSION: ${{ env.APP_VERSION }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          MEDICALRECORD_API_URL: http://localhost:5186/
+        run: |
+          chmod +x packaging/macos/build-installer.sh packaging/macos/test-installer.sh
+          ./packaging/macos/build-installer.sh osx-arm64
+      - name: Install and self-test macOS package and DMG
+        working-directory: work/MedicalRecord2026
+        run: |
+          ./packaging/macos/test-installer.sh \
+            "artifacts/installers/MedicalRecord2026-${APP_VERSION}-osx-arm64-development.pkg" \
+            "artifacts/installers/MedicalRecord2026-${APP_VERSION}-osx-arm64-development.dmg" \
+            osx-arm64 Development
+      - name: Upload macOS installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-Development
+          path: |
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-development.pkg
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-development.dmg
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-development.sha256
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-DEVELOPMENT.txt
+          if-no-files-found: error
