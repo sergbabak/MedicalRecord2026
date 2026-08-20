@@ -3,6 +3,8 @@ name: macos-personal-standalone
 on:
   push:
     branches: [ feature/macos-standalone ]
+  pull_request:
+    branches: [ release/rc-0.4.1 ]
   workflow_dispatch:
 
 permissions:
