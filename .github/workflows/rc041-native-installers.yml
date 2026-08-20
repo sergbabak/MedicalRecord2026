@@ -116,7 +116,7 @@ jobs:
           print(f'SOURCE INTEGRITY PASS: {digest}; {len(data)} bytes')
           PY
       - name: Apply macOS Autonomous 1.1 patch
-        run: python3 ci/patch_macos_autonomous.py work/MedicalRecord2026
+        run: python3 ci/patch_macos_autonomous_pkgroot.py work/MedicalRecord2026
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
