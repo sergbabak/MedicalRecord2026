@@ -1,0 +1,1 @@
+base64-chunked tar.xz staging payload; source tree materialized by CI only after SHA-256 verification.
