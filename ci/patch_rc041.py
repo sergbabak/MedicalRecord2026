@@ -38,4 +38,30 @@ for rel in ['src/MedicalRecord.Api/Endpoints/PapEndpoints.cs', 'src/MedicalRecor
     p = root / rel
     p.write_text(p.read_text(encoding='utf-8').replace('details=', 'details:'), encoding='utf-8')
 
-print('RC 0.4.1 compile patch applied')
+# Development-only macOS signing: sign the complete bundle ad-hoc in one pass.
+# Production path intentionally stays strict: nested Mach-O first, then Developer ID bundle signing.
+p = root / 'packaging/macos/build-installer.sh'
+s = p.read_text(encoding='utf-8')
+old = '''sign_native(){ local target="$1"; if [[ "$APP_IDENTITY" == "-" ]]; then codesign --force --sign - "$target"; else codesign --force --timestamp --options runtime --sign "$APP_IDENTITY" "$target"; fi; }
+while IFS= read -r -d '' f; do if file "$f" | grep -q 'Mach-O'; then sign_native "$f"; codesign --verify --strict --verbose=1 "$f"; fi; done < <(find "$APP/Contents" -type f -print0)
+if [[ "$APP_IDENTITY" == "-" ]]; then codesign --force --entitlements "$ENTITLEMENTS" --sign - "$APP"; else codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APP_IDENTITY" "$APP"; fi
+codesign --verify --strict --verbose=2 "$APP"
+'''
+new = '''if [[ "$APP_IDENTITY" == "-" ]]; then
+  codesign --force --deep --entitlements "$ENTITLEMENTS" --sign - "$APP"
+else
+  while IFS= read -r -d '' f; do
+    if [[ "$f" != "$APP/Contents/MacOS/MedicalRecord2026" ]] && file "$f" | grep -q 'Mach-O'; then
+      codesign --force --timestamp --options runtime --sign "$APP_IDENTITY" "$f"
+      codesign --verify --strict --verbose=1 "$f"
+    fi
+  done < <(find "$APP/Contents" -type f -print0)
+  codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APP_IDENTITY" "$APP"
+fi
+codesign --verify --strict --verbose=2 "$APP"
+'''
+if old not in s:
+    raise SystemExit('Expected macOS signing block not found')
+p.write_text(s.replace(old, new), encoding='utf-8')
+
+print('RC 0.4.1 compile/packaging patch applied')
