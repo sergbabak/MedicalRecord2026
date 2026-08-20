@@ -1,0 +1,193 @@
+name: personal-internal-installers
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: personal-internal-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  SOURCE_SHA256: d177b4bc89a7bf01ca7ef04dc42459472fe0164797a10088255cbcc0b5cecd00
+  APP_VERSION: 1.0.0
+  MAC_APP_VERSION: 1.1.0
+
+jobs:
+  windows-x64:
+    name: Windows x64 Personal/Internal installer
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct and verify source archive
+        shell: pwsh
+        run: |
+          @'
+          import base64, glob, hashlib, pathlib, tarfile
+          parts = sorted(glob.glob('ci/source/rc041.part*'))
+          assert len(parts) == 18, f'Expected 18 chunks, got {len(parts)}'
+          b64 = ''.join(pathlib.Path(p).read_text().strip() for p in parts)
+          data = base64.b64decode(b64, validate=True)
+          digest = hashlib.sha256(data).hexdigest()
+          expected = '${{ env.SOURCE_SHA256 }}'
+          assert digest == expected, f'SHA256 mismatch: {digest} != {expected}'
+          pathlib.Path('source.tar.xz').write_bytes(data)
+          with tarfile.open('source.tar.xz', 'r:xz') as tf: tf.extractall('work')
+          print(f'SOURCE INTEGRITY PASS: {digest}; {len(data)} bytes')
+          '@ | python -
+      - name: Apply Personal/Internal 1.0 patch
+        shell: pwsh
+        run: python ci/patch_personal_internal.py work/MedicalRecord2026
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Static validation + restore + compile
+        shell: pwsh
+        working-directory: work/MedicalRecord2026
+        run: |
+          python scripts/static_validate.py
+          dotnet restore MedicalRecord2026.sln
+          dotnet build MedicalRecord2026.sln -c Release --no-restore
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+      - name: Build Windows Personal/Internal installer
+        shell: pwsh
+        working-directory: work/MedicalRecord2026
+        run: ./packaging/windows/build-installer.ps1 -Runtime win-x64 -Version '${{ env.APP_VERSION }}' -ApiUrl 'http://localhost:5186/' -ReleaseChannel Internal
+      - name: Install / self-test / uninstall Windows package
+        shell: pwsh
+        working-directory: work/MedicalRecord2026
+        run: ./packaging/windows/test-installer.ps1 -Installer "artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-internal-setup.exe" -Runtime win-x64 -ReleaseChannel Internal
+      - name: Create Windows internal attestation
+        shell: pwsh
+        working-directory: work/MedicalRecord2026
+        run: |
+          @{
+            product='Medical Record 2026'
+            version='${{ env.APP_VERSION }}'
+            runtime='win-x64'
+            releaseChannel='Personal/Internal'
+            owner='Бабак Сергей Львович'
+            signed=$false
+            publicDistribution=$false
+            installSelfTestVerified=$true
+            sourceSha256='${{ env.SOURCE_SHA256 }}'
+            githubRunId='${{ github.run_id }}'
+            githubSha='${{ github.sha }}'
+            verifiedAt=(Get-Date).ToUniversalTime().ToString('O')
+          } | ConvertTo-Json | Set-Content -Encoding UTF8 artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-PERSONAL-INTERNAL-ATTESTATION.json
+      - name: Upload Windows Personal/Internal artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-Personal-Internal
+          path: |
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-internal-setup.exe
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-internal-setup.exe.sha256
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-PERSONAL-INTERNAL.txt
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-PERSONAL-INTERNAL-ATTESTATION.json
+            PERSONAL_INTERNAL_RELEASE.ru.md
+          if-no-files-found: error
+
+  macos-arm64-autonomous:
+    name: macOS Apple Silicon Personal/Internal 1.1 Autonomous
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct and verify source archive
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, glob, hashlib, pathlib, tarfile, os
+          parts = sorted(glob.glob('ci/source/rc041.part*'))
+          assert len(parts) == 18, f'Expected 18 chunks, got {len(parts)}'
+          b64 = ''.join(pathlib.Path(p).read_text().strip() for p in parts)
+          data = base64.b64decode(b64, validate=True)
+          digest = hashlib.sha256(data).hexdigest()
+          assert digest == os.environ['SOURCE_SHA256'], f'SHA256 mismatch: {digest}'
+          pathlib.Path('source.tar.xz').write_bytes(data)
+          with tarfile.open('source.tar.xz', 'r:xz') as tf: tf.extractall('work')
+          print(f'SOURCE INTEGRITY PASS: {digest}; {len(data)} bytes')
+          PY
+      - name: Apply macOS Autonomous 1.1 patch
+        run: python3 ci/patch_macos_autonomous_pkgroot.py work/MedicalRecord2026
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Static validation + restore + compile Desktop and embedded API
+        working-directory: work/MedicalRecord2026
+        run: |
+          python3 scripts/static_validate.py
+          dotnet restore MedicalRecord2026.sln
+          dotnet build MedicalRecord2026.sln -c Release --no-restore
+      - name: Build autonomous macOS app/pkg/dmg
+        working-directory: work/MedicalRecord2026
+        env:
+          RELEASE_CHANNEL: Internal
+          VERSION: ${{ env.MAC_APP_VERSION }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          MEDICALRECORD_API_URL: http://127.0.0.1:5186/
+        run: |
+          chmod +x packaging/macos/build-installer.sh packaging/macos/test-installer.sh
+          ./packaging/macos/build-installer.sh osx-arm64
+      - name: Install and autonomous self-test PKG and DMG
+        working-directory: work/MedicalRecord2026
+        env:
+          APP_VERSION: ${{ env.MAC_APP_VERSION }}
+        run: |
+          rm -rf "$HOME/Library/Application Support/MedicalRecord2026"
+          ./packaging/macos/test-installer.sh \
+            "artifacts/installers/MedicalRecord2026-${APP_VERSION}-osx-arm64-internal.pkg" \
+            "artifacts/installers/MedicalRecord2026-${APP_VERSION}-osx-arm64-internal.dmg" \
+            osx-arm64 Internal
+      - name: Verify autonomous data and privacy properties
+        working-directory: work/MedicalRecord2026
+        run: |
+          test -f "$HOME/Library/Application Support/MedicalRecord2026/medicalrecord.db"
+          test -f "$HOME/Library/Application Support/MedicalRecord2026/internal.credentials.json"
+          stat -f '%Sp %N' "$HOME/Library/Application Support/MedicalRecord2026/internal.credentials.json"
+          python3 - <<'PY'
+          import json, pathlib
+          p=pathlib.Path.home()/'Library'/'Application Support'/'MedicalRecord2026'/'internal.credentials.json'
+          d=json.loads(p.read_text())
+          assert d['UserName']=='owner'
+          assert len(d['Password'])>=48
+          print('AUTONOMOUS CREDENTIAL CHECK PASS')
+          PY
+      - name: Create macOS autonomous attestation
+        working-directory: work/MedicalRecord2026
+        env:
+          APP_VERSION: ${{ env.MAC_APP_VERSION }}
+        run: |
+          python3 - <<'PY'
+          import json, os, datetime
+          d={
+            'product':'Medical Record 2026','version':os.environ['APP_VERSION'],'runtime':'osx-arm64',
+            'releaseChannel':'Personal/Internal Autonomous','owner':'Бабак Сергей Львович','signed':False,
+            'notarized':False,'publicDistribution':False,'embeddedApi':True,'database':'SQLite',
+            'apiUrl':'http://127.0.0.1:5186/','manualApiConfigurationRequired':False,
+            'installSelfTestVerified':True,'pkgSelfTestVerified':True,'dmgSelfTestVerified':True,
+            'sourceSha256':os.environ['SOURCE_SHA256'],'githubRunId':'${{ github.run_id }}',
+            'githubSha':'${{ github.sha }}','verifiedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()
+          }
+          with open(f"artifacts/installers/MedicalRecord2026-{os.environ['APP_VERSION']}-osx-arm64-AUTONOMOUS-ATTESTATION.json",'w',encoding='utf-8') as f:
+              json.dump(d,f,ensure_ascii=False,indent=2); f.write('\n')
+          PY
+      - name: Upload macOS Autonomous artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MedicalRecord2026-${{ env.MAC_APP_VERSION }}-osx-arm64-Personal-Internal-Autonomous
+          path: |
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.MAC_APP_VERSION }}-osx-arm64-internal.pkg
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.MAC_APP_VERSION }}-osx-arm64-internal.dmg
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.MAC_APP_VERSION }}-osx-arm64-internal.sha256
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.MAC_APP_VERSION }}-osx-arm64-PERSONAL-INTERNAL.txt
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.MAC_APP_VERSION }}-osx-arm64-AUTONOMOUS-ATTESTATION.json
+            work/MedicalRecord2026/packaging/AUTONOMOUS_MACOS.ru.md
+          if-no-files-found: error
