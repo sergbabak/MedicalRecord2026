@@ -33,28 +33,34 @@ for rel in ['src/MedicalRecord.Api/Endpoints/PapEndpoints.cs', 'src/MedicalRecor
     p = root / rel
     p.write_text(p.read_text(encoding='utf-8').replace('details=', 'details:'), encoding='utf-8')
 
-# macOS: sign nested Mach-O code first, skip the main apphost, then sign the bundle.
-# This applies to both ad-hoc Development and Developer ID Production without --deep.
+# macOS Development artifacts are intentionally unsigned. Trusted Production alone uses
+# Developer ID, hardened runtime, notarization and stapling. This avoids pretending that
+# ad-hoc signing is a trusted distribution signature, and lets the real install smoke test run.
 p = root / 'packaging/macos/build-installer.sh'
 s = p.read_text(encoding='utf-8')
 start = s.index('sign_native(){')
 end_marker = 'codesign --verify --strict --verbose=2 "$APP"\n'
 end = s.index(end_marker, start) + len(end_marker)
-replacement = '''sign_native(){ local target="$1"; if [[ "$APP_IDENTITY" == "-" ]]; then codesign --force --sign - "$target"; else codesign --force --timestamp --options runtime --sign "$APP_IDENTITY" "$target"; fi; }
-while IFS= read -r -d '' f; do
-  if [[ "$f" != "$APP/Contents/MacOS/MedicalRecord2026" ]] && file "$f" | grep -q 'Mach-O'; then
-    sign_native "$f"
-    codesign --verify --strict --verbose=1 "$f"
-  fi
-done < <(find "$APP/Contents" -type f -print0)
-if [[ "$APP_IDENTITY" == "-" ]]; then
-  codesign --force --entitlements "$ENTITLEMENTS" --sign - "$APP"
-else
+replacement = '''if [[ "$RELEASE_CHANNEL" == "Production" ]]; then
+  while IFS= read -r -d '' f; do
+    if [[ "$f" != "$APP/Contents/MacOS/MedicalRecord2026" ]] && file "$f" | grep -q 'Mach-O'; then
+      codesign --force --timestamp --options runtime --sign "$APP_IDENTITY" "$f"
+      codesign --verify --strict --verbose=1 "$f"
+    fi
+  done < <(find "$APP/Contents" -type f -print0)
   codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APP_IDENTITY" "$APP"
+  codesign --verify --strict --verbose=2 "$APP"
+else
+  echo 'Development app bundle intentionally unsigned; trusted signing is Production-only.'
 fi
-codesign --verify --strict --verbose=2 "$APP"
 '''
 s = s[:start] + replacement + s[end:]
+p.write_text(s, encoding='utf-8')
+
+p = root / 'packaging/macos/test-installer.sh'
+s = p.read_text(encoding='utf-8')
+s = s.replace('"$APP/Contents/MacOS/MedicalRecord2026" --self-test\ncodesign --verify --strict --verbose=2 "$APP"\n\nif [[ "$CHANNEL" == Production ]]; then', '"$APP/Contents/MacOS/MedicalRecord2026" --self-test\n\nif [[ "$CHANNEL" == Production ]]; then\n  codesign --verify --strict --verbose=2 "$APP"')
+s = s.replace('codesign --verify --strict --verbose=2 "$MOUNT/Medical Record 2026.app"\nhdiutil detach "$MOUNT"', 'if [[ "$CHANNEL" == Production ]]; then codesign --verify --strict --verbose=2 "$MOUNT/Medical Record 2026.app"; fi\nhdiutil detach "$MOUNT"')
 p.write_text(s, encoding='utf-8')
 
 # Windows: WinExe can leave LASTEXITCODE unset in pwsh; wait for the process and inspect ExitCode explicitly.
