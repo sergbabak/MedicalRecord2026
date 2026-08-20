@@ -56,6 +56,7 @@ jobs:
           with tarfile.open('standalone-overlay.tar.xz','r:xz') as tf: tf.extractall('work/MedicalRecord2026')
           print(f'STANDALONE OVERLAY INTEGRITY PASS: {digest}')
           PY
+          python3 ci/patch_standalone_build.py work/MedicalRecord2026
 
       - uses: actions/setup-dotnet@v4
         with:
