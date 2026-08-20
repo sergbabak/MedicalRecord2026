@@ -1,4 +1,4 @@
-name: rc041-native-installers
+name: personal-internal-installers
 
 on:
   pull_request:
@@ -9,22 +9,22 @@ permissions:
   contents: read
 
 concurrency:
-  group: rc041-native-${{ github.ref }}
+  group: personal-internal-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   DOTNET_NOLOGO: 'true'
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
   SOURCE_SHA256: d177b4bc89a7bf01ca7ef04dc42459472fe0164797a10088255cbcc0b5cecd00
-  APP_VERSION: 0.4.1
+  APP_VERSION: 1.0.0
 
 jobs:
   windows-x64:
-    name: Windows x64 installer + install smoke test
+    name: Windows x64 Personal/Internal installer
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
-      - name: Reconstruct and verify RC 0.4.1 source archive
+      - name: Reconstruct and verify source archive
         shell: pwsh
         run: |
           @'
@@ -36,13 +36,13 @@ jobs:
           digest = hashlib.sha256(data).hexdigest()
           expected = '${{ env.SOURCE_SHA256 }}'
           assert digest == expected, f'SHA256 mismatch: {digest} != {expected}'
-          pathlib.Path('rc041-source.tar.xz').write_bytes(data)
-          with tarfile.open('rc041-source.tar.xz', 'r:xz') as tf: tf.extractall('work')
+          pathlib.Path('source.tar.xz').write_bytes(data)
+          with tarfile.open('source.tar.xz', 'r:xz') as tf: tf.extractall('work')
           print(f'SOURCE INTEGRITY PASS: {digest}; {len(data)} bytes')
           '@ | python -
-      - name: Apply reviewed RC compile fixes
+      - name: Apply Personal/Internal 1.0 patch
         shell: pwsh
-        run: python ci/patch_rc041.py work/MedicalRecord2026
+        run: python ci/patch_personal_internal.py work/MedicalRecord2026
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -56,30 +56,50 @@ jobs:
       - name: Install Inno Setup 6
         shell: pwsh
         run: choco install innosetup -y --no-progress
-      - name: Build Windows development installer
+      - name: Build Windows Personal/Internal installer
         shell: pwsh
         working-directory: work/MedicalRecord2026
-        run: ./packaging/windows/build-installer.ps1 -Runtime win-x64 -Version '${{ env.APP_VERSION }}' -ApiUrl 'http://localhost:5186/' -ReleaseChannel Development
+        run: ./packaging/windows/build-installer.ps1 -Runtime win-x64 -Version '${{ env.APP_VERSION }}' -ApiUrl 'http://localhost:5186/' -ReleaseChannel Internal
       - name: Install / self-test / uninstall Windows package
         shell: pwsh
         working-directory: work/MedicalRecord2026
-        run: ./packaging/windows/test-installer.ps1 -Installer "artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-development-setup.exe" -Runtime win-x64 -ReleaseChannel Development
-      - name: Upload Windows installer artifact
+        run: ./packaging/windows/test-installer.ps1 -Installer "artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-internal-setup.exe" -Runtime win-x64 -ReleaseChannel Internal
+      - name: Create Windows internal attestation
+        shell: pwsh
+        working-directory: work/MedicalRecord2026
+        run: |
+          @{
+            product='Medical Record 2026'
+            version='${{ env.APP_VERSION }}'
+            runtime='win-x64'
+            releaseChannel='Personal/Internal'
+            owner='Бабак Сергей Львович'
+            signed=$false
+            publicDistribution=$false
+            installSelfTestVerified=$true
+            sourceSha256='${{ env.SOURCE_SHA256 }}'
+            githubRunId='${{ github.run_id }}'
+            githubSha='${{ github.sha }}'
+            verifiedAt=(Get-Date).ToUniversalTime().ToString('O')
+          } | ConvertTo-Json | Set-Content -Encoding UTF8 artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-PERSONAL-INTERNAL-ATTESTATION.json
+      - name: Upload Windows Personal/Internal artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-Development
+          name: MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-Personal-Internal
           path: |
-            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-development-setup.exe
-            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-development-setup.exe.sha256
-            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-DEVELOPMENT.txt
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-internal-setup.exe
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-internal-setup.exe.sha256
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-PERSONAL-INTERNAL.txt
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-win-x64-PERSONAL-INTERNAL-ATTESTATION.json
+            PERSONAL_INTERNAL_RELEASE.ru.md
           if-no-files-found: error
 
   macos-arm64:
-    name: macOS Apple Silicon pkg+dmg + install smoke test
+    name: macOS Apple Silicon Personal/Internal pkg+dmg
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Reconstruct and verify RC 0.4.1 source archive
+      - name: Reconstruct and verify source archive
         shell: bash
         run: |
           python3 - <<'PY'
@@ -90,12 +110,12 @@ jobs:
           data = base64.b64decode(b64, validate=True)
           digest = hashlib.sha256(data).hexdigest()
           assert digest == os.environ['SOURCE_SHA256'], f'SHA256 mismatch: {digest}'
-          pathlib.Path('rc041-source.tar.xz').write_bytes(data)
-          with tarfile.open('rc041-source.tar.xz', 'r:xz') as tf: tf.extractall('work')
+          pathlib.Path('source.tar.xz').write_bytes(data)
+          with tarfile.open('source.tar.xz', 'r:xz') as tf: tf.extractall('work')
           print(f'SOURCE INTEGRITY PASS: {digest}; {len(data)} bytes')
           PY
-      - name: Apply reviewed RC compile fixes
-        run: python3 ci/patch_rc041.py work/MedicalRecord2026
+      - name: Apply Personal/Internal 1.0 patch
+        run: python3 ci/patch_personal_internal.py work/MedicalRecord2026
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -105,10 +125,10 @@ jobs:
           python3 scripts/static_validate.py
           dotnet restore MedicalRecord2026.sln
           dotnet build MedicalRecord2026.sln -c Release --no-restore
-      - name: Build macOS development app/pkg/dmg
+      - name: Build macOS Personal/Internal app/pkg/dmg
         working-directory: work/MedicalRecord2026
         env:
-          RELEASE_CHANNEL: Development
+          RELEASE_CHANNEL: Internal
           VERSION: ${{ env.APP_VERSION }}
           BUILD_NUMBER: ${{ github.run_number }}
           MEDICALRECORD_API_URL: http://localhost:5186/
@@ -119,16 +139,33 @@ jobs:
         working-directory: work/MedicalRecord2026
         run: |
           ./packaging/macos/test-installer.sh \
-            "artifacts/installers/MedicalRecord2026-${APP_VERSION}-osx-arm64-development.pkg" \
-            "artifacts/installers/MedicalRecord2026-${APP_VERSION}-osx-arm64-development.dmg" \
-            osx-arm64 Development
-      - name: Upload macOS installer artifacts
+            "artifacts/installers/MedicalRecord2026-${APP_VERSION}-osx-arm64-internal.pkg" \
+            "artifacts/installers/MedicalRecord2026-${APP_VERSION}-osx-arm64-internal.dmg" \
+            osx-arm64 Internal
+      - name: Create macOS internal attestation
+        working-directory: work/MedicalRecord2026
+        run: |
+          python3 - <<'PY'
+          import json, os, datetime
+          d={
+            'product':'Medical Record 2026','version':os.environ['APP_VERSION'],'runtime':'osx-arm64',
+            'releaseChannel':'Personal/Internal','owner':'Бабак Сергей Львович','signed':False,
+            'notarized':False,'publicDistribution':False,'installSelfTestVerified':True,
+            'sourceSha256':os.environ['SOURCE_SHA256'],'githubRunId':'${{ github.run_id }}',
+            'githubSha':'${{ github.sha }}','verifiedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()
+          }
+          with open(f"artifacts/installers/MedicalRecord2026-{os.environ['APP_VERSION']}-osx-arm64-PERSONAL-INTERNAL-ATTESTATION.json",'w',encoding='utf-8') as f:
+              json.dump(d,f,ensure_ascii=False,indent=2); f.write('\n')
+          PY
+      - name: Upload macOS Personal/Internal artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-Development
+          name: MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-Personal-Internal
           path: |
-            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-development.pkg
-            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-development.dmg
-            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-development.sha256
-            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-DEVELOPMENT.txt
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-internal.pkg
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-internal.dmg
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-internal.sha256
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-PERSONAL-INTERNAL.txt
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-PERSONAL-INTERNAL-ATTESTATION.json
+            PERSONAL_INTERNAL_RELEASE.ru.md
           if-no-files-found: error
