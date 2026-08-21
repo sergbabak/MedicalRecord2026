@@ -1,0 +1,132 @@
+name: macos-personal-standalone
+
+on:
+  push:
+    branches: [ feature/macos-standalone ]
+  pull_request:
+    branches: [ release/rc-0.4.1 ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  BASE_SOURCE_SHA256: d177b4bc89a7bf01ca7ef04dc42459472fe0164797a10088255cbcc0b5cecd00
+  OVERLAY_SHA256: d4edb7c26c323b3194ba21616a873dc870831477fdbbb75e6abe9fcabb7f7c1f
+  APP_VERSION: 1.1.0
+
+jobs:
+  macos-arm64-standalone:
+    name: macOS Apple Silicon Personal Standalone
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct and verify Personal/Internal base source
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, glob, hashlib, pathlib, tarfile, os
+          parts=sorted(glob.glob('ci/source/rc041.part*'))
+          assert len(parts)==18, f'Expected 18 base chunks, got {len(parts)}'
+          b64=''.join(pathlib.Path(p).read_text().strip() for p in parts)
+          data=base64.b64decode(b64, validate=True)
+          digest=hashlib.sha256(data).hexdigest()
+          assert digest==os.environ['BASE_SOURCE_SHA256'], f'Base SHA mismatch: {digest}'
+          pathlib.Path('base-source.tar.xz').write_bytes(data)
+          with tarfile.open('base-source.tar.xz','r:xz') as tf: tf.extractall('work')
+          print(f'BASE SOURCE INTEGRITY PASS: {digest}')
+          PY
+          python3 ci/patch_personal_internal.py work/MedicalRecord2026
+
+      - name: Apply and verify Standalone 1.1 overlay
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, glob, hashlib, pathlib, tarfile, os
+          parts=sorted(glob.glob('ci/standalone-overlay/part*.b64'))
+          assert len(parts)==5, f'Expected 5 overlay chunks, got {len(parts)}'
+          b64=''.join(pathlib.Path(p).read_text().strip() for p in parts)
+          data=base64.b64decode(b64, validate=True)
+          digest=hashlib.sha256(data).hexdigest()
+          assert digest==os.environ['OVERLAY_SHA256'], f'Overlay SHA mismatch: {digest}'
+          pathlib.Path('standalone-overlay.tar.xz').write_bytes(data)
+          with tarfile.open('standalone-overlay.tar.xz','r:xz') as tf: tf.extractall('work/MedicalRecord2026')
+          print(f'STANDALONE OVERLAY INTEGRITY PASS: {digest}')
+          PY
+          python3 ci/patch_standalone_build.py work/MedicalRecord2026
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Static validation + restore + compile
+        working-directory: work/MedicalRecord2026
+        shell: bash
+        run: |
+          python3 scripts/static_validate.py
+          dotnet restore MedicalRecord2026.sln
+          dotnet build MedicalRecord2026.sln -c Release --no-restore
+
+      - name: Build standalone app/pkg/dmg
+        working-directory: work/MedicalRecord2026
+        env:
+          VERSION: ${{ env.APP_VERSION }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        shell: bash
+        run: |
+          chmod +x packaging/macos/build-standalone.sh packaging/macos/test-standalone.sh
+          ./packaging/macos/build-standalone.sh osx-arm64
+
+      - name: Install and run end-to-end standalone self-test
+        working-directory: work/MedicalRecord2026
+        shell: bash
+        run: |
+          ./packaging/macos/test-standalone.sh \
+            "artifacts/installers/MedicalRecord2026-${APP_VERSION}-osx-arm64-standalone.pkg" \
+            "artifacts/installers/MedicalRecord2026-${APP_VERSION}-osx-arm64-standalone.dmg" \
+            osx-arm64
+
+      - name: Create standalone attestation
+        working-directory: work/MedicalRecord2026
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, datetime
+          d={
+            'product':'Medical Record 2026',
+            'version':os.environ['APP_VERSION'],
+            'runtime':'osx-arm64',
+            'releaseChannel':'Personal Standalone',
+            'ownerOnly':True,
+            'bundledLocalApi':True,
+            'apiBinding':'127.0.0.1 dynamic port',
+            'database':'SQLite',
+            'desktopDirectDatabaseAccess':False,
+            'signed':False,
+            'notarized':False,
+            'installSelfTestVerified':True,
+            'baseSourceSha256':os.environ['BASE_SOURCE_SHA256'],
+            'standaloneOverlaySha256':os.environ['OVERLAY_SHA256'],
+            'githubRunId':'${{ github.run_id }}',
+            'githubSha':'${{ github.sha }}',
+            'verifiedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()
+          }
+          p=f"artifacts/installers/MedicalRecord2026-{os.environ['APP_VERSION']}-osx-arm64-PERSONAL-STANDALONE-ATTESTATION.json"
+          with open(p,'w',encoding='utf-8') as f: json.dump(d,f,ensure_ascii=False,indent=2); f.write('\n')
+          PY
+
+      - name: Upload Personal Standalone artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-Personal-Standalone
+          path: |
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-standalone.pkg
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-standalone.dmg
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-standalone.sha256
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-PERSONAL-STANDALONE.txt
+            work/MedicalRecord2026/artifacts/installers/MedicalRecord2026-${{ env.APP_VERSION }}-osx-arm64-PERSONAL-STANDALONE-ATTESTATION.json
+            work/MedicalRecord2026/docs/MACOS_PERSONAL_STANDALONE.ru.md
+          if-no-files-found: error
